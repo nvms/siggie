@@ -1,0 +1,35 @@
+{
+  "name": "siggie",
+  "version": "1.0.0",
+  "description": "A small reactive runtime for JavaScript",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": "./src/index.js",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "bench": "vitest bench --run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@preact/signals-core": "1.14.4",
+    "@reactively/core": "0.0.8",
+    "alien-signals": "2.0.8",
+    "vitest": "4.1.10"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nvms/siggie.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nvms/siggie/issues"
+  },
+  "homepage": "https://github.com/nvms/siggie#readme"
+}

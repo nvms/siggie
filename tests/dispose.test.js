@@ -1,0 +1,93 @@
+import { describe, it, expect, vi } from "vitest";
+import { signal, computed, effect, flushSync } from "../src/index.js";
+describe("dispose", () => {
+  it("detaches a disposed effect: upstream changes no longer reach it", () => {
+    const a = signal("a");
+    const spyC = vi.fn(() => a.value);
+    const c = computed(spyC);
+    const unsub = effect(() => c.value);
+    flushSync();
+    expect(spyC).toHaveBeenCalledTimes(1);
+    unsub();
+    a.value = "b";
+    flushSync();
+    expect(spyC).toHaveBeenCalledTimes(1);
+    expect(c.value).toBe("b");
+  });
+  it("cascades disposal up the chain: unobserved intermediates unwind", () => {
+    const a = signal("a");
+    const spyB = vi.fn(() => a.value);
+    const b = computed(spyB);
+    const c = computed(() => b.value);
+    c.value;
+    expect(spyB).toHaveBeenCalledOnce();
+    c.value = null;
+    spyB.mockClear();
+    expect(b.value).toBe("a");
+    expect(spyB).toHaveBeenCalledOnce();
+  });
+  it("does not re-execute wired computeds on plain re-read (control)", () => {
+    const a = signal("a");
+    const spyB = vi.fn(() => a.value);
+    const b = computed(spyB);
+    const c = computed(() => b.value);
+    c.value;
+    spyB.mockClear();
+    expect(b.value).toBe("a");
+    expect(spyB).not.toHaveBeenCalled();
+  });
+  it("cascades disposal up all branches of a diamond", () => {
+    const a = signal("a");
+    const spyB = vi.fn(() => a.value);
+    const spyC = vi.fn(() => a.value);
+    const b = computed(spyB);
+    const c = computed(spyC);
+    const d = computed(() => b.value + c.value);
+    d.value;
+    d.value = null;
+    spyB.mockClear();
+    spyC.mockClear();
+    expect(b.value).toBe("a");
+    expect(c.value).toBe("a");
+    expect(spyB).toHaveBeenCalledOnce();
+    expect(spyC).toHaveBeenCalledOnce();
+  });
+  it("disposing an effect unwinds the whole observed subtree", () => {
+    const a = signal("a");
+    const spyB = vi.fn(() => a.value);
+    const spyC = vi.fn(() => b.value);
+    const b = computed(spyB);
+    const c = computed(spyC);
+    const unsub = effect(() => c.value);
+    flushSync();
+    unsub();
+    spyB.mockClear();
+    spyC.mockClear();
+    expect(c.value).toBe("a");
+    expect(spyC).toHaveBeenCalledOnce();
+    expect(b.value).toBe("a");
+    expect(spyB).toHaveBeenCalledOnce();
+    expect(a.value).toBe("a");
+  });
+  it("dispose is idempotent and safe on a never-read computed", () => {
+    const a = signal("a");
+    const b = computed(() => a.value);
+    b.value = null;
+    b.value = null;
+    expect(b.value).toBeNull();
+    expect(a.value).toBe("a");
+  });
+  it("unwound nodes re-subscribe and read fresh when observed again", () => {
+    const a = signal("a");
+    const spyB = vi.fn(() => a.value);
+    const b = computed(spyB);
+    const c = computed(() => b.value);
+    c.value;
+    spyB.mockClear();
+    c.value = null;
+    a.value = "b";
+    const d = computed(() => b.value);
+    expect(d.value).toBe("b");
+    expect(spyB).toHaveBeenCalledOnce();
+  });
+});
