@@ -1,6 +1,5 @@
 import { vi, it, expect } from "vitest";
-import { signal, flushSync, computed } from "../src/index.js";
-import { effect } from "alien-signals";
+import { signal, flushSync, computed, effect } from "../src/index.js";
 it("should run computeds once for multiple dep changes", () => {
   const a = signal("a");
   const b = signal("b");

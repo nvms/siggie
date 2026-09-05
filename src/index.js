@@ -176,6 +176,10 @@ export class Sig {
   }
 
   get value() {
+    if (this._fn) {
+      if (batchHead) commitBatch();
+      this._refresh();
+    }
     track(this);
     return this._value;
   }
@@ -200,7 +204,10 @@ export class Sig {
   }
 
   get peek() {
-    if (this._fn) this._refresh();
+    if (this._fn) {
+      if (batchHead) commitBatch();
+      this._refresh();
+    }
     return this._value;
   }
 }
@@ -222,7 +229,6 @@ function propagate(edge) {
 
 function track(source) {
   const observer = current;
-  if (source._fn) source._refresh();
   if (!observer) return;
   let edge = observer._cursor;
   if (edge && edge.source === source) {
@@ -238,6 +244,7 @@ function track(source) {
     edge = next;
   }
   observer._cursor = null;
+  if (source._fn && source._stale) source._refresh();
   edge = {
     source,
     observer,
@@ -259,17 +266,15 @@ function track(source) {
 
 class Computed extends Sig {
   get value() {
-    if (this._stale || current) track(this);
+    if (batchHead) commitBatch();
+    if (this._stale) this._refresh();
+    if (current) track(this);
     return this._value;
   }
 
   set value(nextValue) {
     this._dispose();
-    if (this.eq(this._value, nextValue)) return;
-    this._value = nextValue;
-    if (!this._subs) return;
-    propagate(this._subs);
-    flushSyncEffects();
+    super.value = nextValue;
   }
 }
 
@@ -286,6 +291,7 @@ function enqueueEffect(node) {
 }
 
 function flushSyncEffects() {
+  if (batchDepth) return;
   let source;
   let changed;
   while (syncHead) {
@@ -293,16 +299,20 @@ function flushSyncEffects() {
     syncHead = node._nextEffect;
     if (!syncHead) syncTail = undefined;
     node._nextEffect = null;
+    if (!node._fn) continue;
     const dependency = node._deps;
     if (node._computedDeps === 1 && dependency === node._depTail) {
-      if (dependency.source !== source) {
+      if (dependency.source !== source || source._stale) {
         source = dependency.source;
         changed = !source._refresh();
       }
       if (changed) node._runEffect();
       else node._stale = false;
-    } else if (!node._computedDeps) node._run();
-    else node._refreshEffect();
+    } else {
+      source = undefined;
+      if (!node._computedDeps) node._run();
+      else node._refreshEffect();
+    }
   }
   syncTail = undefined;
 }
@@ -364,14 +374,17 @@ export function flushSync() {
     if (!node._fn) continue;
     const dependency = node._deps;
     if (node._computedDeps === 1 && dependency === node._depTail) {
-      if (dependency.source !== source) {
+      if (dependency.source !== source || source._stale) {
         source = dependency.source;
         changed = !source._refresh();
       }
       if (changed) node._runEffect();
       else node._stale = false;
-    } else if (!node._computedDeps) node._run();
-    else node._refreshEffect();
+    } else {
+      source = undefined;
+      if (!node._computedDeps) node._run();
+      else node._refreshEffect();
+    }
   }
   effectTail = undefined;
 }
