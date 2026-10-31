@@ -18,31 +18,31 @@ Throughput in operations per second. Each operation is the complete workload des
 
 ## js-reactivity-benchmark
 
-Results from [js-reactivity-benchmark](https://github.com/milomg/js-reactivity-benchmark) on Node 24, in milliseconds. Smaller numbers are faster.
+Results from [js-reactivity-benchmark](https://github.com/milomg/js-reactivity-benchmark) on Node 24 with `NODE_ENV=production`, in milliseconds. Smaller numbers are faster.
 
 | Test | Siggie | Alien Signals | Preact Signals | Reactively | Vue |
 |---|---:|---:|---:|---:|---:|
-| createSignals | **2.1** | 2.5 | 2.2 | 2.8 | 7.4 |
-| createComputations | 52.0 | 39.3 | 63.0 | **29.9** | 103.3 |
-| updateSignals | 273.1 | 315.7 | **261.4** | 337.6 | 397.5 |
-| avoidablePropagation | **79.7** | 85.7 | 82.0 | 104.2 | 139.1 |
-| broadPropagation | 106.2 | 101.8 | **96.9** | 113.9 | 151.8 |
-| deepPropagation | 34.2 | **33.0** | 35.2 | 41.6 | 57.6 |
-| diamond | **67.0** | 83.7 | 80.1 | 84.0 | 110.7 |
-| mux | **84.1** | 94.1 | 91.6 | 104.0 | 155.9 |
-| repeatedObservers | 14.1 | 22.9 | **13.9** | 20.9 | 18.6 |
-| triangle | **23.9** | 25.5 | 26.9 | 26.6 | 36.1 |
-| unstable | 17.7 | 27.0 | **16.6** | 44.8 | 25.7 |
-| molBench | 16.9 | 16.6 | 18.1 | **16.6** | 36.2 |
-| cellx1000 | 8.7 | **7.7** | 14.3 | 16.3 | 36.7 |
-| cellx2500 | **19.2** | 33.4 | 33.9 | 39.2 | 114.2 |
-| 2-10x5 - lazy80% | **142.4** | 203.3 | 207.8 | 196.7 | 288.2 |
-| 6-10x10 - dyn25% - lazy80% | 129.3 | 143.1 | 149.2 | **126.2** | 209.4 |
-| 4-1000x12 - dyn5% | 284.6 | 311.8 | 376.1 | **282.8** | 496.8 |
-| 25-1000x5 | 358.5 | 394.7 | 449.8 | **308.4** | 693.8 |
-| 3-5x500 | 94.4 | 102.5 | 108.5 | **94.0** | 159.9 |
-| 6-100x15 - dyn50% | **152.1** | 172.0 | 195.0 | 161.9 | 259.3 |
-| Total | **1960** | 2216 | 2322 | 2152 | 3498 |
+| createSignals | **2.2** | 2.3 | 2.3 | 2.7 | 7.3 |
+| createComputations | 53.1 | 38.6 | 62.6 | **31.3** | 111.3 |
+| updateSignals | 276.0 | 315.0 | **255.3** | 339.7 | 400.0 |
+| avoidablePropagation | **81.0** | 86.9 | 81.7 | 106.3 | 140.2 |
+| broadPropagation | 110.2 | 102.3 | **98.3** | 117.5 | 150.4 |
+| deepPropagation | 36.8 | **33.1** | 35.4 | 42.7 | 60.2 |
+| diamond | **70.5** | 86.4 | 77.8 | 87.1 | 111.0 |
+| mux | **81.5** | 91.7 | 92.1 | 101.0 | 148.0 |
+| repeatedObservers | 14.2 | 22.9 | **13.9** | 21.6 | 18.4 |
+| triangle | **24.7** | 25.8 | 26.8 | 27.1 | 37.1 |
+| unstable | 17.5 | 26.6 | **16.2** | 44.6 | 25.7 |
+| molBench | 15.8 | 15.8 | **15.8** | 16.1 | 34.8 |
+| cellx1000 | 9.1 | **4.3** | 8.6 | 8.9 | 17.0 |
+| cellx2500 | 25.4 | **13.8** | 20.6 | 18.0 | 48.0 |
+| 2-10x5 - lazy80% | **141.3** | 200.9 | 207.6 | 201.2 | 292.1 |
+| 6-10x10 - dyn25% - lazy80% | 131.4 | 150.6 | 151.3 | **130.8** | 213.5 |
+| 4-1000x12 - dyn5% | 303.8 | 342.8 | 392.6 | **277.5** | 497.7 |
+| 25-1000x5 | 353.5 | 405.3 | 450.1 | **314.0** | 681.8 |
+| 3-5x500 | **93.5** | 105.5 | 114.1 | 101.7 | 161.2 |
+| 6-100x15 - dyn50% | **151.7** | 180.8 | 198.2 | 162.7 | 262.9 |
+| Total | **1993** | 2251 | 2321 | 2153 | 3419 |
 
 ## Run
 
