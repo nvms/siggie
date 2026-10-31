@@ -30,6 +30,7 @@ quantity.value = 3;
 - `flushSync()` drains queued effects.
 - Read `.peek` without creating a dependency.
 - Assign `.eq` to customize equality.
+- A computed that throws rethrows the same error on every read until one of its inputs changes.
 
 ## Development
 

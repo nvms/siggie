@@ -1,320 +1,387 @@
-let current;
-let currentScope;
-let queued = false;
-let batchDepth = 0;
-let batchHead;
-let batchTail;
-let effectHead;
-let effectTail;
-let syncHead;
-let syncTail;
+const STALE = 1;
+const RUNNING = 2;
+const FAILED = 4;
+const BATCHED = 8;
+const SYNC = 16;
+const EFFECT = 32;
 
-const equal = (a, b) => a === b;
+let current;
+let cursor = null;
+let runId = 0;
+let runCounter = 0;
+let currentScope;
+let globalVersion = 0;
+let batchDepth = 0;
+let batchHead = null;
+let batchTail = null;
+let syncHead = null;
+let syncTail = null;
+let effectHead = null;
+let effectTail = null;
+let flushing = false;
+let queued = false;
 
 export class Sig {
-  constructor(value, computation = false, effect = 0, scope) {
-    this.eq = equal;
-    this._fn = computation ? value : null;
-    this._value = computation ? undefined : value;
-    this._previous = this._value;
-    this._batched = false;
-    this._nextBatch = null;
-    this._effect = effect;
-    this._nextEffect = null;
-    this._stale = computation;
-    this._deps = null;
-    this._computedDeps = 0;
-    this._depTail = null;
-    this._cursor = null;
-    this._version = 0;
-    this._trackedBy = null;
-    this._trackedVersion = 0;
-    this._subs = null;
-    this._tail = null;
-    this._scope = scope;
-    this._disposed = false;
-
-    if (!computation) return;
-    if (currentScope) currentScope.push(this);
-    if (effect === 2) this._run();
-    else if (effect === 1) {
-      enqueueEffect(this);
-      queueEffects();
-    }
-  }
-
-  _remove(edge) {
-    const source = edge.source;
-    const observer = edge.observer;
-
-    if (edge.prevSub) edge.prevSub.nextSub = edge.nextSub;
-    else source._subs = edge.nextSub;
-    if (edge.nextSub) edge.nextSub.prevSub = edge.prevSub;
-    else source._tail = edge.prevSub;
-
-    if (edge.prevDep) edge.prevDep.nextDep = edge.nextDep;
-    else observer._deps = edge.nextDep;
-    if (edge.nextDep) edge.nextDep.prevDep = edge.prevDep;
-    else observer._depTail = edge.prevDep;
-    if (source._fn) observer._computedDeps--;
-
-    if (!source._subs && source._fn && !source._effect) {
-      source._stale = true;
-      let dependency = source._deps;
-      while (dependency) {
-        const next = dependency.nextDep;
-        source._remove(dependency);
-        dependency = next;
-      }
-    }
-  }
-
-  _refresh() {
-    if (!this._fn || !this._stale) return false;
-    const oldValue = this._value;
-    let edge = this._deps;
-    if (!edge) {
-      this._run();
-      return this.eq(oldValue, this._value);
-    }
-    while (edge) {
-      const source = edge.source;
-      if (!source._fn || !source._refresh()) {
-        this._run();
-        return this.eq(oldValue, this._value);
-      }
-      edge = edge.nextDep;
-    }
-    this._stale = false;
-    return false;
-  }
-
-  _refreshEffect() {
-    if (!this._stale || !this._fn) return;
-    if (!this._computedDeps) {
-      this._run();
-      return;
-    }
-    let edge = this._deps;
-    while (edge) {
-      const source = edge.source;
-      if (!source._fn || !source._refresh()) {
-        this._run();
-        return;
-      }
-      edge = edge.nextDep;
-    }
-    if (!this._deps) this._run();
-    else this._stale = false;
-  }
-
-  _runEffect() {
-    if (this._scope || this._deps !== this._depTail) {
-      this._run();
-      return;
-    }
-    if (typeof this._value === "function") this._value();
-    const previous = current;
-    this._cursor = this._deps;
-    this._version++;
-    current = this;
-    try {
-      this._value = this._fn();
-    } finally {
-      current = previous;
-      let edge = this._cursor;
-      while (edge) {
-        const next = edge.nextDep;
-        this._remove(edge);
-        edge = next;
-      }
-      this._cursor = null;
-      this._stale = false;
-    }
-  }
-
-  _run(disconnect = false) {
-    if (this._effect && typeof this._value === "function") this._value();
-
-    const previous = current;
-    const scope = this._scope;
-    let previousScope;
-    this._cursor = this._deps;
-    this._version++;
-    current = this;
-    if (scope) {
-      previousScope = currentScope;
-      currentScope = scope;
-    }
-
-    try {
-      if (!disconnect) this._value = this._fn();
-    } finally {
-      current = previous;
-      if (scope) currentScope = previousScope;
-      let edge = this._cursor;
-      while (edge) {
-        const next = edge.nextDep;
-        this._remove(edge);
-        edge = next;
-      }
-      this._cursor = null;
-      this._stale = false;
-    }
-    return this._value;
-  }
-
-  _dispose() {
-    if (this._disposed) return;
-    this._disposed = true;
-    if (this._fn) this._run(true);
-    this._effect = 0;
+  constructor(value) {
+    this._value = value;
     this._fn = null;
-    if (this._scope) {
-      for (const child of this._scope) child.value = null;
-    }
+    this._flags = 0;
+    this._version = 0;
+    this._trackedRun = 0;
+    this._subs = null;
+    this._subTail = null;
+    this._next = null;
+    this._previous = undefined;
+  }
+
+  eq(a, b) {
+    return a === b;
   }
 
   get value() {
-    if (this._fn) {
-      if (batchHead) commitBatch();
-      this._refresh();
-    }
-    track(this);
+    if (current !== undefined) track(this);
     return this._value;
   }
 
   set value(nextValue) {
-    if (this.eq(this._value, nextValue)) return;
-    if (batchDepth && this._subs) {
-      if (!this._batched) {
-        this._previous = this._value;
-        this._batched = true;
-        if (batchTail) batchTail._nextBatch = this;
-        else batchHead = this;
-        batchTail = this;
-      }
-      this._value = nextValue;
-      return;
-    }
-    this._value = nextValue;
-    if (!this._subs) return;
-    propagate(this._subs);
-    flushSyncEffects();
+    write(this, nextValue);
   }
 
   get peek() {
-    if (this._fn) {
-      if (batchHead) commitBatch();
-      this._refresh();
-    }
     return this._value;
   }
 }
 
-function propagate(edge) {
-  while (edge) {
-    const observer = edge.observer;
-    if (!observer._stale && !observer._disposed) {
-      observer._stale = true;
-      if (observer._effect === 2) enqueueSync(observer);
-      else if (observer._effect === 1) {
-        enqueueEffect(observer);
-        queueEffects();
-      } else if (observer._subs) propagate(observer._subs);
-    }
-    edge = edge.nextSub;
-  }
-}
-
-function track(source) {
-  const observer = current;
-  if (!observer) return;
-  let edge = observer._cursor;
-  if (edge && edge.source === source) {
-    observer._cursor = edge.nextDep;
-    source._trackedBy = observer;
-    source._trackedVersion = observer._version;
-    return;
-  }
-  if (source._trackedBy === observer && source._trackedVersion === observer._version) return;
-  while (edge) {
-    const next = edge.nextDep;
-    observer._remove(edge);
-    edge = next;
-  }
-  observer._cursor = null;
-  if (source._fn && source._stale) source._refresh();
-  edge = {
-    source,
-    observer,
-    prevSub: source._tail,
-    nextSub: null,
-    prevDep: observer._depTail,
-    nextDep: null,
-  };
-  if (source._tail) source._tail.nextSub = edge;
-  else source._subs = edge;
-  source._tail = edge;
-  if (observer._depTail) observer._depTail.nextDep = edge;
-  else observer._deps = edge;
-  observer._depTail = edge;
-  if (source._fn) observer._computedDeps++;
-  source._trackedBy = observer;
-  source._trackedVersion = observer._version;
-}
-
 class Computed extends Sig {
+  constructor(fn) {
+    super(undefined);
+    this._fn = fn;
+    this._flags = STALE;
+    this._checked = -1;
+    this._deps = null;
+    this._depTail = null;
+    if (currentScope) currentScope.push(this);
+  }
+
   get value() {
-    if (batchHead) commitBatch();
-    if (this._stale) this._refresh();
-    if (current) track(this);
+    if (this._fn !== null) {
+      if (batchHead !== null) commitBatch();
+      refresh(this);
+    }
+    if (current !== undefined) track(this);
+    if (this._flags & FAILED) throw this._value;
     return this._value;
   }
 
   set value(nextValue) {
-    this._dispose();
-    super.value = nextValue;
+    dispose(this);
+    write(this, nextValue);
+  }
+
+  get peek() {
+    if (this._fn !== null) {
+      if (batchHead !== null) commitBatch();
+      refresh(this);
+    }
+    if (this._flags & FAILED) throw this._value;
+    return this._value;
   }
 }
 
+class Effect {
+  constructor(fn, sync, scope) {
+    this._fn = fn;
+    this._value = undefined;
+    this._flags = sync ? EFFECT | SYNC : EFFECT;
+    this._deps = null;
+    this._depTail = null;
+    this._next = null;
+    this._scope = scope;
+    if (currentScope) currentScope.push(this);
+  }
+
+  set value(_) {
+    dispose(this);
+  }
+}
+
+function write(node, nextValue) {
+  if (node.eq(node._value, nextValue)) return;
+  if (batchDepth && node._subs !== null) {
+    if (!(node._flags & BATCHED)) {
+      node._previous = node._value;
+      node._flags |= BATCHED;
+      if (batchTail !== null) batchTail._next = node;
+      else batchHead = node;
+      batchTail = node;
+    }
+    node._value = nextValue;
+    return;
+  }
+  node._value = nextValue;
+  node._version++;
+  globalVersion++;
+  if (node._subs === null) return;
+  propagate(node._subs);
+  drain(false);
+}
+
+function dispose(node) {
+  if (node._fn === null) return;
+  if (node._flags & EFFECT) {
+    if (typeof node._value === "function") cleanup(node);
+    node._value = undefined;
+    trim(node, node._deps, true);
+    node._fn = null;
+    if (node._scope) {
+      for (const child of node._scope) child.value = null;
+    }
+    return;
+  }
+  trim(node, node._deps, node._subs !== null);
+  if (node._flags & FAILED) node._value = undefined;
+  node._fn = null;
+  node._flags = 0;
+}
+
+function link(edge) {
+  const source = edge.source;
+  const tail = source._subTail;
+  edge.prevSub = tail;
+  source._subTail = edge;
+  if (tail !== null) {
+    tail.nextSub = edge;
+    return;
+  }
+  source._subs = edge;
+  if (source._fn !== null) activate(source);
+}
+
+function unlink(edge) {
+  const source = edge.source;
+  const prevSub = edge.prevSub;
+  const nextSub = edge.nextSub;
+  if (prevSub !== null) prevSub.nextSub = nextSub;
+  else source._subs = nextSub;
+  if (nextSub !== null) nextSub.prevSub = prevSub;
+  else source._subTail = prevSub;
+  edge.prevSub = null;
+  edge.nextSub = null;
+  if (source._subs === null && source._fn !== null) deactivate(source);
+}
+
+function activate(node) {
+  if (node._checked === globalVersion) node._flags &= ~STALE;
+  else node._flags |= STALE;
+  for (let edge = node._deps; edge !== null; edge = edge.nextDep) link(edge);
+}
+
+function deactivate(node) {
+  if (!(node._flags & STALE)) node._checked = globalVersion;
+  for (let edge = node._deps; edge !== null; edge = edge.nextDep) unlink(edge);
+}
+
+function track(source) {
+  const next = cursor;
+  if (next !== null && next.source === source) {
+    next.version = source._version;
+    cursor = next.nextDep;
+    source._trackedRun = runId;
+    return;
+  }
+  if (source._trackedRun === runId) return;
+  source._trackedRun = runId;
+  const observer = current;
+  const prevDep = next !== null ? next.prevDep : observer._depTail;
+  const edge = {
+    source,
+    observer,
+    version: source._version,
+    prevDep,
+    nextDep: next,
+    prevSub: null,
+    nextSub: null,
+  };
+  if (prevDep !== null) prevDep.nextDep = edge;
+  else observer._deps = edge;
+  if (next !== null) next.prevDep = edge;
+  else observer._depTail = edge;
+  if (observer._flags & EFFECT || observer._subs !== null) link(edge);
+}
+
+function trim(node, edge, live) {
+  if (edge === null) return;
+  const prevDep = edge.prevDep;
+  if (prevDep !== null) prevDep.nextDep = null;
+  else node._deps = null;
+  node._depTail = prevDep;
+  if (!live) return;
+  for (; edge !== null; edge = edge.nextDep) unlink(edge);
+}
+
+function propagate(edge) {
+  for (; edge !== null; edge = edge.nextSub) {
+    const node = edge.observer;
+    const flags = node._flags;
+    if (flags & (STALE | RUNNING)) continue;
+    node._flags = flags | STALE;
+    if (flags & EFFECT) {
+      if (flags & SYNC) enqueueSync(node);
+      else enqueueEffect(node);
+    } else if (node._subs !== null) propagate(node._subs);
+  }
+}
+
+function refresh(node) {
+  const flags = node._flags;
+  if (flags & RUNNING) throw new Error("Cycle detected");
+  if (node._subs !== null) {
+    if (!(flags & STALE)) return;
+  } else if (node._checked === globalVersion) return;
+  const initial = node._checked === -1;
+  node._checked = globalVersion;
+  node._flags = flags & ~STALE;
+  if (initial || sourcesChanged(node)) runComputed(node);
+}
+
+function sourcesChanged(node) {
+  for (let edge = node._deps; edge !== null; edge = edge.nextDep) {
+    const source = edge.source;
+    if (source._fn !== null) refresh(source);
+    if (source._version !== edge.version) return true;
+  }
+  return false;
+}
+
+function runComputed(node) {
+  const previous = current;
+  const previousCursor = cursor;
+  const previousRunId = runId;
+  current = node;
+  cursor = node._deps;
+  runId = ++runCounter;
+  node._flags |= RUNNING;
+  try {
+    const value = node._fn();
+    if (node._flags & FAILED || !node.eq(node._value, value)) {
+      node._value = value;
+      node._flags &= ~FAILED;
+      node._version++;
+    }
+  } catch (error) {
+    node._value = error;
+    node._flags |= FAILED;
+    node._version++;
+  } finally {
+    node._flags &= ~RUNNING;
+    const unused = cursor;
+    current = previous;
+    cursor = previousCursor;
+    runId = previousRunId;
+    trim(node, unused, node._subs !== null);
+  }
+}
+
+function runEffect(node) {
+  if (typeof node._value === "function") cleanup(node);
+  const previous = current;
+  const previousCursor = cursor;
+  const previousRunId = runId;
+  const previousScope = currentScope;
+  const scope = node._scope;
+  current = node;
+  cursor = node._deps;
+  runId = ++runCounter;
+  if (scope) currentScope = scope;
+  node._flags |= RUNNING;
+  try {
+    node._value = node._fn();
+  } finally {
+    node._flags &= ~RUNNING;
+    const unused = cursor;
+    current = previous;
+    cursor = previousCursor;
+    runId = previousRunId;
+    currentScope = previousScope;
+    trim(node, unused, true);
+  }
+}
+
+function cleanup(node) {
+  const fn = node._value;
+  const previous = current;
+  node._value = undefined;
+  current = undefined;
+  try {
+    fn();
+  } finally {
+    current = previous;
+  }
+}
+
+function runSyncEffect(node) {
+  if (flushing) {
+    runEffect(node);
+    return;
+  }
+  flushing = true;
+  try {
+    runEffect(node);
+  } finally {
+    flushing = false;
+  }
+  if (syncHead !== null) drain(false);
+}
+
+function refreshEffect(node) {
+  if (node._fn === null) return;
+  node._flags &= ~STALE;
+  if (node._deps === null || sourcesChanged(node)) runEffect(node);
+}
+
 function enqueueSync(node) {
-  if (syncTail) syncTail._nextEffect = node;
+  if (syncTail !== null) syncTail._next = node;
   else syncHead = node;
   syncTail = node;
 }
 
 function enqueueEffect(node) {
-  if (effectTail) effectTail._nextEffect = node;
+  if (effectTail !== null) effectTail._next = node;
   else effectHead = node;
   effectTail = node;
+  queueEffects();
 }
 
-function flushSyncEffects() {
-  if (batchDepth) return;
-  let source;
-  let changed;
-  while (syncHead) {
-    const node = syncHead;
-    syncHead = node._nextEffect;
-    if (!syncHead) syncTail = undefined;
-    node._nextEffect = null;
-    if (!node._fn) continue;
-    const dependency = node._deps;
-    if (node._computedDeps === 1 && dependency === node._depTail) {
-      if (dependency.source !== source || source._stale) {
-        source = dependency.source;
-        changed = !source._refresh();
+function drain(includeEffects) {
+  if (flushing || batchDepth) return;
+  flushing = true;
+  let failed = false;
+  let error;
+  try {
+    for (;;) {
+      let node = syncHead;
+      if (node !== null) {
+        syncHead = node._next;
+        if (syncHead === null) syncTail = null;
+      } else if (includeEffects && effectHead !== null) {
+        node = effectHead;
+        effectHead = node._next;
+        if (effectHead === null) effectTail = null;
+      } else break;
+      node._next = null;
+      try {
+        refreshEffect(node);
+      } catch (caught) {
+        if (!failed) {
+          failed = true;
+          error = caught;
+        }
       }
-      if (changed) node._runEffect();
-      else node._stale = false;
-    } else {
-      source = undefined;
-      if (!node._computedDeps) node._run();
-      else node._refreshEffect();
     }
+  } finally {
+    flushing = false;
   }
-  syncTail = undefined;
+  if (failed) throw error;
 }
 
 function queueEffects() {
@@ -325,32 +392,26 @@ function queueEffects() {
       flushSync();
     } finally {
       queued = false;
-      if (effectHead) queueEffects();
+      if (effectHead !== null) queueEffects();
     }
   });
 }
 
 function commitBatch() {
-  while (batchHead) {
+  while (batchHead !== null) {
     const node = batchHead;
-    batchHead = node._nextBatch;
-    node._nextBatch = null;
-    node._batched = false;
-    if (!node.eq(node._previous, node._value) && node._subs) {
-      const edge = node._subs;
-      const observer = edge.observer;
-      if (!edge.nextSub && observer._effect && !observer._stale && !observer._disposed) {
-        observer._stale = true;
-        if (observer._effect === 2) enqueueSync(observer);
-        else {
-          enqueueEffect(observer);
-          queueEffects();
-        }
-      } else propagate(edge);
-    }
+    const previous = node._previous;
+    batchHead = node._next;
+    node._next = null;
+    node._previous = undefined;
+    node._flags &= ~BATCHED;
+    if (node.eq(previous, node._value)) continue;
+    node._version++;
+    globalVersion++;
+    if (node._subs !== null) propagate(node._subs);
   }
-  batchTail = undefined;
-  flushSyncEffects();
+  batchTail = null;
+  drain(false);
 }
 
 export function batch(fn) {
@@ -358,35 +419,12 @@ export function batch(fn) {
   try {
     return fn();
   } finally {
-    if (!--batchDepth) commitBatch();
+    if (--batchDepth === 0) commitBatch();
   }
 }
 
 export function flushSync() {
-  flushSyncEffects();
-  let source;
-  let changed;
-  while (effectHead) {
-    const node = effectHead;
-    effectHead = node._nextEffect;
-    if (!effectHead) effectTail = undefined;
-    node._nextEffect = null;
-    if (!node._fn) continue;
-    const dependency = node._deps;
-    if (node._computedDeps === 1 && dependency === node._depTail) {
-      if (dependency.source !== source || source._stale) {
-        source = dependency.source;
-        changed = !source._refresh();
-      }
-      if (changed) node._runEffect();
-      else node._stale = false;
-    } else {
-      source = undefined;
-      if (!node._computedDeps) node._run();
-      else node._refreshEffect();
-    }
-  }
-  effectTail = undefined;
+  drain(true);
 }
 
 export function signal(value) {
@@ -394,10 +432,15 @@ export function signal(value) {
 }
 
 export function computed(fn) {
-  return new Computed(fn, true);
+  return new Computed(fn);
 }
 
 export function effect(fn, sync = false, scope) {
-  const node = new Computed(fn, true, sync ? 2 : 1, scope);
-  return () => node._dispose();
+  const node = new Effect(fn, sync, scope);
+  if (sync) runSyncEffect(node);
+  else {
+    node._flags |= STALE;
+    enqueueEffect(node);
+  }
+  return () => dispose(node);
 }

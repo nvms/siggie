@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Sig, batch, computed, effect, flushSync, signal } from "../src/index.js";
+import { batch, computed, effect, flushSync, signal } from "../src/index.js";
 
 for (const sync of [true, false]) {
   describe(sync ? "synchronous regressions" : "microtask regressions", () => {
@@ -107,28 +107,121 @@ test("writable computeds coalesce assignments inside batches", () => {
   stop();
 });
 
-for (const makeComputed of [computed, fn => new Sig(fn, true)]) {
-  test(`refreshes and tracks ${makeComputed === computed ? "computed" : "Sig"} reads`, () => {
-    const source = signal(1);
-    let runs = 0;
-    const derived = makeComputed(() => { runs++; return source.value * 2; });
-    expect(derived.value).toBe(2);
-    expect(derived.value).toBe(2);
-    expect(runs).toBe(1);
-    const seen = [];
-    const stop = effect(() => { seen.push(derived.value + derived.value); }, true);
-    source.value = 2;
+test("refreshes and tracks computed reads", () => {
+  const source = signal(1);
+  let runs = 0;
+  const derived = computed(() => { runs++; return source.value * 2; });
+  expect(derived.value).toBe(2);
+  expect(derived.value).toBe(2);
+  expect(runs).toBe(1);
+  const seen = [];
+  const stop = effect(() => { seen.push(derived.value + derived.value); }, true);
+  source.value = 2;
+  expect(seen).toEqual([4, 8]);
+  batch(() => {
+    source.value = 3;
+    expect(derived.value).toBe(6);
+    source.value = 4;
+    expect(derived.peek).toBe(8);
     expect(seen).toEqual([4, 8]);
-    batch(() => {
-      source.value = 3;
-      expect(derived.value).toBe(6);
-      source.value = 4;
-      expect(derived.peek).toBe(8);
-      expect(seen).toEqual([4, 8]);
-    });
-    expect(seen).toEqual([4, 8, 16]);
-    stop();
-    source.value = 5;
-    expect(derived.value).toBe(10);
   });
-}
+  expect(seen).toEqual([4, 8, 16]);
+  stop();
+  source.value = 5;
+  expect(derived.value).toBe(10);
+});
+
+test("skips a computed whose computed input recomputes to the same value", () => {
+  const a = signal(1);
+  const d = signal(1);
+  const positive = computed(() => d.value > 0);
+  let runs = 0;
+  const total = computed(() => { runs++; return a.value + (positive.value ? 1 : 0); });
+  const stop = effect(() => { total.value; }, true);
+  runs = 0;
+  d.value = 2;
+  expect(runs).toBe(0);
+  a.value = 2;
+  expect(runs).toBe(1);
+  stop();
+});
+
+test("unobserved computeds do not retain subscriptions to their sources", () => {
+  const source = signal(1);
+  let runs = 0;
+  const derived = Array.from({ length: 100 }, () => computed(() => { runs++; return source.value; }));
+  derived.forEach(node => node.value);
+  expect(source._subs).toBeNull();
+  runs = 0;
+  derived.forEach(node => node.value);
+  expect(runs).toBe(0);
+  source.value = 2;
+  expect(runs).toBe(0);
+  expect(derived.map(node => node.value).every(value => value === 2)).toBe(true);
+  expect(runs).toBe(100);
+});
+
+test("computeds rethrow their error until an input changes", () => {
+  const source = signal(1);
+  let runs = 0;
+  const derived = computed(() => {
+    runs++;
+    if (source.value === 1) throw new Error("boom");
+    return source.value;
+  });
+  expect(() => derived.value).toThrow("boom");
+  expect(() => derived.peek).toThrow("boom");
+  expect(runs).toBe(1);
+  source.value = 2;
+  expect(derived.value).toBe(2);
+});
+
+test("effects observe a computed recovering from an error", () => {
+  const source = signal(1);
+  const derived = computed(() => {
+    if (source.value === 1) throw new Error("boom");
+    return source.value;
+  });
+  const seen = [];
+  const stop = effect(() => {
+    try { seen.push(derived.value); } catch (error) { seen.push(error.message); }
+  }, true);
+  source.value = 2;
+  source.value = 1;
+  expect(seen).toEqual(["boom", 2, "boom"]);
+  stop();
+});
+
+test("detects cycles between computeds", () => {
+  const a = computed(() => b.value);
+  const b = computed(() => a.value);
+  expect(() => a.value).toThrow("Cycle detected");
+});
+
+test("a throwing effect does not stop the rest of the flush", () => {
+  const source = signal(0);
+  const seen = [];
+  const stops = [
+    effect(() => { if (source.value) throw new Error("boom"); }),
+    effect(() => { seen.push(source.value); }),
+  ];
+  flushSync();
+  source.value = 1;
+  expect(() => flushSync()).toThrow("boom");
+  expect(seen).toEqual([0, 1]);
+  stops.forEach(stop => stop());
+});
+
+test("resubscribing to an unwound computed does not recompute it", () => {
+  const source = signal(1);
+  let runs = 0;
+  const derived = computed(() => { runs++; return source.value * 2; });
+  const first = effect(() => { derived.value; }, true);
+  first();
+  const seen = [];
+  const second = effect(() => { seen.push(derived.value); }, true);
+  expect(runs).toBe(1);
+  source.value = 2;
+  expect(seen).toEqual([2, 4]);
+  second();
+});

@@ -23,8 +23,21 @@ describe("dispose", () => {
     expect(spyB).toHaveBeenCalledOnce();
     c.value = null;
     spyB.mockClear();
-    expect(b.value).toBe("a");
+    a.value = "b";
+    expect(spyB).not.toHaveBeenCalled();
+    expect(b.value).toBe("b");
     expect(spyB).toHaveBeenCalledOnce();
+  });
+  it("unwound nodes keep their value when inputs are unchanged", () => {
+    const a = signal("a");
+    const spyB = vi.fn(() => a.value);
+    const b = computed(spyB);
+    const c = computed(() => b.value);
+    c.value;
+    c.value = null;
+    spyB.mockClear();
+    expect(b.value).toBe("a");
+    expect(spyB).not.toHaveBeenCalled();
   });
   it("does not re-execute wired computeds on plain re-read (control)", () => {
     const a = signal("a");
@@ -47,8 +60,11 @@ describe("dispose", () => {
     d.value = null;
     spyB.mockClear();
     spyC.mockClear();
-    expect(b.value).toBe("a");
-    expect(c.value).toBe("a");
+    a.value = "b";
+    expect(spyB).not.toHaveBeenCalled();
+    expect(spyC).not.toHaveBeenCalled();
+    expect(b.value).toBe("b");
+    expect(c.value).toBe("b");
     expect(spyB).toHaveBeenCalledOnce();
     expect(spyC).toHaveBeenCalledOnce();
   });
@@ -63,11 +79,14 @@ describe("dispose", () => {
     unsub();
     spyB.mockClear();
     spyC.mockClear();
-    expect(c.value).toBe("a");
+    a.value = "b";
+    flushSync();
+    expect(spyB).not.toHaveBeenCalled();
+    expect(spyC).not.toHaveBeenCalled();
+    expect(c.value).toBe("b");
     expect(spyC).toHaveBeenCalledOnce();
-    expect(b.value).toBe("a");
+    expect(b.value).toBe("b");
     expect(spyB).toHaveBeenCalledOnce();
-    expect(a.value).toBe("a");
   });
   it("dispose is idempotent and safe on a never-read computed", () => {
     const a = signal("a");
